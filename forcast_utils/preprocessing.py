@@ -27,6 +27,49 @@ def download_data(ticker: str, start: str, end: str) -> pd.DataFrame:
 
     return data
 
+def preprocess_15_min_data(data: pd.DataFrame, target_column: str, feature_columns: list, window: int) -> pd.DataFrame:
+    """ This function will preprocess data given in a 15 minute interval such that it is ready for training. In this case the window which is asked in the other functions is not needed as
+    we proxy the volatility with the standart realized volatility."""
+
+
+    standart_realized_volatility = calculate_standard_realized_volatility(data, base_column='Close')
+    aggregation_rules = {
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum'
+    }
+    # Filter for columns that exist in the dataframe before aggregating
+    valid_rules = {col: rule for col, rule in aggregation_rules.items() if col in data.columns}
+    aggregated_dataframe = data.resample('D').agg(valid_rules)
+    aggregated_dataframe = aggregated_dataframe.dropna()
+
+    # add the standart realized volatility to the aggregated dataframe
+    aggregated_dataframe['Standard_Realized_Volatility'] = standart_realized_volatility
+
+    print(aggregated_dataframe.head())
+
+    dataframe = preprocess_data(aggregated_dataframe, target_column, feature_columns + ['Standard_Realized_Volatility'], window=window)
+    return dataframe
+
+
+
+
+
+def calculate_standard_realized_volatility(data: pd.DataFrame, base_column) -> pd.Series:
+    """ This function will calculate the standard realized volatility based on the base column. """
+    assert base_column in data.columns, f"Data must contain '{base_column}' column"
+    assert isinstance(data.index, pd.DatetimeIndex), "Data index must be a DatetimeIndex"
+
+    # caclulate the 15 minute returns
+    return_series = data[base_column].pct_change().copy()
+    return_series = return_series.fillna(0)
+    return_series = return_series ** 2  # Square the returns to get the variance
+    return_series = return_series.resample('D').sum()  # Resample to daily returns
+    return_series = np.sqrt(return_series)  # Take the square root to get the standard deviation
+    return return_series
+
 
 def preprocess_data(data: pd.DataFrame, target_column: str, feature_columns: list, window: int = 30,) -> pd.DataFrame:
     """ This function will preprocess the data so that it is ready for training. """
@@ -45,7 +88,8 @@ def preprocess_data(data: pd.DataFrame, target_column: str, feature_columns: lis
     variance_column = f'{base_column}_Variance'
 
     data_temp = add_target_column(data_temp, target_column=target_column, base_column=variance_column)
-    data_temp = scale_data(data_temp, columns=feature_columns + [target_column] + [base_column] + [variance_column])
+    # for now we will not scale the data as we want to use the raw values for the GARCH model
+#    data_temp = scale_data(data_temp, columns=feature_columns + [target_column] + [base_column] + [variance_column])
 
     data_temp = data_temp.dropna()
     data_temp = data_temp.reset_index(drop=True)
