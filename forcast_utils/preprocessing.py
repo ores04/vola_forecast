@@ -71,7 +71,7 @@ def calculate_standard_realized_volatility(data: pd.DataFrame, base_column) -> p
     return return_series
 
 
-def preprocess_data(data: pd.DataFrame, target_column: str, feature_columns: list, window: int = 30,) -> pd.DataFrame:
+def preprocess_data(data: pd.DataFrame, target_column: str, feature_columns: list, window: int = 30, base_for_target="Standard_Realized_Volatility") -> pd.DataFrame:
     """ This function will preprocess the data so that it is ready for training. """
     assert window > 0, "Window must be greater than 0."
     assert data is not None, "Data must not be None."
@@ -87,7 +87,7 @@ def preprocess_data(data: pd.DataFrame, target_column: str, feature_columns: lis
 
     variance_column = f'{base_column}_Variance'
 
-    data_temp = add_target_column(data_temp, target_column=target_column, base_column=variance_column)
+    data_temp = add_target_column(data_temp, target_column=target_column, base_column=base_for_target)
     # for now we will not scale the data as we want to use the raw values for the GARCH model
 #    data_temp = scale_data(data_temp, columns=feature_columns + [target_column] + [base_column] + [variance_column])
 

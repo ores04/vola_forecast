@@ -8,7 +8,7 @@ import jax
 from flax import nnx
 import jax.numpy as jnp
 
-from flax.nnx import rnglib, LSTMCell
+from flax.nnx import rnglib, LSTMCell, RNN
 from flax.nnx.nn import initializers
 from flax.nnx.nn.linear import Linear
 from flax.nnx.nn.activations import sigmoid
@@ -217,23 +217,29 @@ class GARCHModel(nnx.Module):
 
 class LSTM(nnx.Module):
 
-    def __init__(self, features: int, hidden_features: int = 256, rngs: nnx.Rngs | None = None):
-        """Initialize the LSTM model."""
-        self.cell = CustomLSTMCell(
-            features,
-            hidden_features,
+    def __init__(self, features: int, hidden_features: list[int],special_last_layer: bool, rngs: nnx.Rngs | None = None):
+        """This function initializes the LSTM model.
+            features: int - the number of features in the input data, this means the number of features each time step has.
+            hidden_features: list[int] - the number of hidden features in the LSTM cell, the lists length is the number of layers in the LSTM while the last layer
+            will be a CustomLSTM cell with a specific activation function.
+            rngs: nnx.Rngs | None - the random number generator, if None it will use the default one.
+        """
+
+        self.lstm_cells = self.construct_lstm_cells(
+            features=features,
+            hidden_features=hidden_features,
+            sepecial_last_layer=special_last_layer,
             rngs=rngs
         )
-        self.hidden_size = hidden_features
-        self.features = features
-        self.recurrent_layer = nnx.RNN(
-            cell=self.cell,
+
+        self.reccurent_layers = self.construct_reccurent_layers(
+            lstm_cells=self.lstm_cells,
             rngs=rngs
         )
 
 
-        self.linear_layer = nnx.Linear(
-            in_features=hidden_features,
+        self.linear_layer1 = nnx.Linear(
+            in_features=hidden_features[-1],
             out_features=1,  # Output a single value for volatility prediction
             use_bias=True,
             rngs=rngs
@@ -241,15 +247,65 @@ class LSTM(nnx.Module):
 
     def __call__(self, x):
         """Forward pass of the LSTM"""
-        y = self.recurrent_layer(x)
-        last_cell_output = y[:, -1, :]
-        final_y = self.linear_layer(last_cell_output)
-        return final_y
+        for recurrent, linear in self.reccurent_layers:
+            x = recurrent(x)  # Pass the input through the recurrent layer
+            if linear is not None:
+                x = linear(x)
+        # now feed it to the linear layer
+        x = x[:, -1, :]
+        x = self.linear_layer1(x)
+        return x  # Return the last output of the LSTM, which is the prediction for the last time step
+
+    @staticmethod
+    def construct_lstm_cells(features: int, hidden_features: list[int], sepecial_last_layer:bool, rngs: nnx.Rngs | None = None) -> list[nnx.LSTMCell]:
+        """Construct the LSTM cells for the model."""
+        lstm_cells = []
+        for i in range(len(hidden_features)):
+            if i == len(hidden_features) - 1 and sepecial_last_layer:
+                # Use the CustomLSTMCell for the last layer
+                lstm_cells.append(CustomLSTMCell(
+                    in_features=features if i == 0 else hidden_features[i],
+                    hidden_features=hidden_features[i],
+                    rngs=rngs
+                ))
+            else:
+                # Use the standard LSTMCell for other layers
+                lstm_cells.append(LSTMCell(
+                    in_features=features if i == 0 else hidden_features[i],
+                    hidden_features=hidden_features[i],
+                    rngs=rngs
+                ))
+        return lstm_cells
+    @staticmethod
+    def construct_reccurent_layers(lstm_cells: list[nnx.LSTMCell], rngs: nnx.Rngs | None = None) -> list[tuple[nnx.RNN, nnx.Linear]]:
+        """Construct the recurrent layers for the model."""
+        layers = []
+        for i in range(len(lstm_cells)):
+            # Create a recurrent layer for each LSTM cell
+            rnn_layer = nnx.RNN(
+                cell=lstm_cells[i],
+                rngs=rngs,
+            )
+            if i == len(lstm_cells) - 1:
+                # If it's the last layer, we don't need a linear layer after it
+                layers.append((rnn_layer, None))
+                break
+            # Add a linear layer after each RNN layer
+            linear_layer = nnx.Linear(
+                in_features=lstm_cells[i].hidden_features,
+                out_features=lstm_cells[i + 1].hidden_features,
+                use_bias=True,
+                rngs=rngs
+            )
+            layers.append((rnn_layer, linear_layer))
+        return layers
+
+
 
 
 
 if __name__ == "__main__":
     model = GARCHModel()
     nnx.display(model)
-    lstm = LSTM(4, 256, nnx.Rngs(jax.random.PRNGKey(0)))
+    lstm = LSTM(4, [256, 128],False, nnx.Rngs(jax.random.PRNGKey(0)))
     nnx.display(lstm)
